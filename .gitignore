@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local data (databases)
+Data/
+BookonnectWorkerService/Data/
+
+# Secrets / local config
+appsettings.*.local.json
+secrets.json
+.env
+.env.*
+
+# OS
+.DS_Store
