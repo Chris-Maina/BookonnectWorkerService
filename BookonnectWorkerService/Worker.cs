@@ -23,15 +23,19 @@ public class Worker : BackgroundService
       // Initialize services
       await InitializeServicesAsync(stoppingToken);
 
-      // Perform business logic
-      await PerformDatabaseSyncOperationsAsync(stoppingToken);
-      await PerformUserProfileUpdateAsync(stoppingToken);
-
+      // Run both periodic jobs concurrently; each loops until cancellation
+      await Task.WhenAll(
+        PerformDatabaseSyncOperationsAsync(stoppingToken),
+        PerformUserProfileUpdateAsync(stoppingToken));
+    }
+    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+    {
+      _logger.LogInformation("Worker is shutting down.");
     }
     catch (Exception ex)
     {
       _logger.LogError(ex, "Unexpected error occurred during execution.");
-      throw; // Stop the service if initial load fails
+      throw; // Stop the service if initialization fails
     }
   }
 
@@ -61,7 +65,7 @@ public class Worker : BackgroundService
 
   private async Task PerformDatabaseSyncOperationsAsync(CancellationToken cancellationToken)
   {
-    _logger.LogInformation("Starting initial data sync...");
+    _logger.LogInformation("Starting database sync loop...");
     while (!cancellationToken.IsCancellationRequested)
     {
       try
@@ -69,13 +73,11 @@ public class Worker : BackgroundService
         using var scope = _serviceScopeFactory.CreateScope();
         var syncService = scope.ServiceProvider.GetRequiredService<IDatabaseSyncService>();
 
-        // check sync status
         var status = await syncService.GetSyncStatusAsync();
         _logger.LogInformation("Sync status RelationalBookCount: {RelationalBookCount}, VectorBookCount: {VectorBookCount}, InSyncCount: {InSyncCount} ({Percentage:F1}%)", status.RelationalBookCount, status.VectorBookCount, status.InSyncCount, status.SyncPercentage);
 
         if (!status.IsFullySynced)
         {
-          // perform sync
           _logger.LogInformation("Databases are not fully synced. Starting sync operation...");
           await syncService.SyncRelationalToVectorDBAsync();
 
@@ -86,64 +88,67 @@ public class Worker : BackgroundService
         {
           _logger.LogInformation("✅ Databases are already in sync. No action needed.");
         }
-
-        // Wait before next sync cycle
-        await Task.Delay(_dbSyncInterval, cancellationToken);
       }
       catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
       {
-        _logger.LogInformation("Data syncing was cancelled");
-        throw;
+        break;
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "❌ Unexpected error during databases syncing");
-        throw new InvalidOperationException("Data sync failed due to unexpected error", ex);
+        // Transient failures should not stop the service; retry next cycle
+        _logger.LogError(ex, "❌ Error during database sync. Retrying in {Interval}", _dbSyncInterval);
       }
+
+      if (!await DelayAsync(_dbSyncInterval, cancellationToken)) break;
     }
+    _logger.LogInformation("Database sync loop stopped.");
   }
 
   private async Task PerformUserProfileUpdateAsync(CancellationToken cancellationToken)
   {
+    _logger.LogInformation("Starting user profile update loop...");
+    // Watermark: only preferences changed after this point are processed
     var lastProfileUpdate = DateTime.UtcNow;
     while (!cancellationToken.IsCancellationRequested)
     {
+      if (!await DelayAsync(_userUpdateInterval, cancellationToken)) break;
+
       try
       {
-        _logger.LogInformation("Starting user profile update...");
+        var cycleStart = DateTime.UtcNow;
+        _logger.LogInformation("Starting user profile update since {Since}...", lastProfileUpdate);
 
-        // Periodically process updated profiles
-        if (DateTime.UtcNow - lastProfileUpdate > _userUpdateInterval)
-        {
-          _logger.LogDebug("Starting periodic user profile update...");
-          using var scope = _serviceScopeFactory.CreateScope();
-          var preferenceService = scope.ServiceProvider.GetRequiredService<IPreferenceService>();
-          await preferenceService.ProcessUpdatedPreferencesAsync(lastProfileUpdate);
+        using var scope = _serviceScopeFactory.CreateScope();
+        var preferenceService = scope.ServiceProvider.GetRequiredService<IPreferenceService>();
+        await preferenceService.ProcessUpdatedPreferencesAsync(lastProfileUpdate);
 
-          lastProfileUpdate = DateTime.UtcNow;
-        }
-        // Wait for the user update interval before checking again
-        await Task.Delay(_userUpdateInterval, cancellationToken);
-
+        // Advance only on success so failed cycles are retried
+        lastProfileUpdate = cycleStart;
         _logger.LogInformation("✅ User profile update completed");
       }
       catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
       {
-        _logger.LogInformation("User profile update was cancelled");
-        throw;
+        break;
       }
       catch (Exception ex)
       {
-        _logger.LogError(ex, "❌ Unexpected error during user profile update");
-        throw new InvalidOperationException("User profile update failed due to unexpected error", ex);
+        _logger.LogError(ex, "❌ Error during user profile update. Retrying in {Interval}", _userUpdateInterval);
       }
+    }
+    _logger.LogInformation("User profile update loop stopped.");
+  }
+
+  // Returns false if cancelled during the delay
+  private static async Task<bool> DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+  {
+    try
+    {
+      await Task.Delay(delay, cancellationToken);
+      return true;
+    }
+    catch (OperationCanceledException)
+    {
+      return false;
     }
   }
 }
-/**
- * This code defines a Worker class that inherits from BackgroundService.
- * Tasks to be carried out the Worker class:
- * 1. Initialize databases.
- * 2. Periodically sync vector database with relational database.
- * 3. Periodically create/update user profile vectors based on user preferences.
- */
