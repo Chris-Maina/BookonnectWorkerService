@@ -1,8 +1,21 @@
 # Build output
-bin/
-obj/
+[Bb]in/
+[Oo]bj/
 [Dd]ebug/
 [Rr]elease/
+artifacts/
+[Pp]ublish/
+
+# Test results and coverage
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+
+# NuGet package output
+*.nupkg
+*.snupkg
 
 # IDE
 .vs/
@@ -10,6 +23,9 @@ obj/
 .idea/
 *.user
 *.suo
+*.userosscache
+*.sln.docstates
+*.sln.iml
 
 # Local data (databases)
 Data/
@@ -23,3 +39,5 @@ secrets.json
 
 # OS
 .DS_Store
+Thumbs.db
+Desktop.ini
